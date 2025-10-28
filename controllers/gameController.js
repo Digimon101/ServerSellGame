@@ -1,11 +1,19 @@
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const database = require('../config/database');
+
+// --- Ensure Upload Directories Exist ---
+const uploadDir = path.join(__dirname, '../uploads/gamepic');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+    console.log('✅ Created directory:', uploadDir);
+}
 
 // --- Multer Configuration for Game Images ---
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/gamepic/');
+        cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
         cb(null, 'game-' + Date.now() + path.extname(file.originalname));
