@@ -17,31 +17,30 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- MIDDLEWARE ---
-// CORS Configuration (Important for Render.com)
+// CORS Configuration
 const corsOptions = {
-    origin: process.env.FRONTEND_URL || '*', // Set your frontend URL in environment variables
+    origin: process.env.FRONTEND_URL || '*',
     credentials: true,
     optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
 
-// Body Parser
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// Body Parser with limits
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request Logging (for debugging on Render)
+// Request Logging
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
     next();
 });
 
 // --- STATIC FILE SERVING ---
-// Ensure uploads directory exists on Render
 const uploadsPath = path.join(__dirname, 'uploads');
 app.use('/profile', express.static(path.join(uploadsPath, 'profile')));
 app.use('/gamepic', express.static(path.join(uploadsPath, 'gamepic')));
 
-// --- HEALTH CHECK ROUTE (Important for Render) ---
+// --- HEALTH CHECK ROUTE ---
 app.get("/health", (req, res) => {
     res.status(200).json({ 
         status: "healthy", 
@@ -53,42 +52,42 @@ app.get("/health", (req, res) => {
 // --- ROUTES ---
 
 // === User/Profile/Wallet Routes ===
-app.post("/register", userController.register);
-app.post("/login", userController.login);
-app.put("/update-profile/:id", userController.upload.single("image"), userController.updateProfile);
-app.get("/wallet/:id", userController.getWallet);
-app.put("/wallet/:id", userController.addFunds);
-app.get("/wallet/history/:id", userController.getTopupHistory);
-app.get("/wallet/purchase-history/:id", userController.getPurchaseHistory);
-app.get("/users", userController.getAllUsers);
-app.delete("/users/:id", userController.deleteUser);
-app.get("/users/details/:id", userController.getUserDetailsForAdmin);
+app.post("/register", asyncHandler(userController.register));
+app.post("/login", asyncHandler(userController.login));
+app.put("/update-profile/:id", userController.upload.single("image"), asyncHandler(userController.updateProfile));
+app.get("/wallet/:id", asyncHandler(userController.getWallet));
+app.put("/wallet/:id", asyncHandler(userController.addFunds));
+app.get("/wallet/history/:id", asyncHandler(userController.getTopupHistory));
+app.get("/wallet/purchase-history/:id", asyncHandler(userController.getPurchaseHistory));
+app.get("/users", asyncHandler(userController.getAllUsers));
+app.delete("/users/:id", asyncHandler(userController.deleteUser));
+app.get("/users/details/:id", asyncHandler(userController.getUserDetailsForAdmin));
 
 // === Game Routes ===
-app.get("/games/top-sellers", gameController.getTopSellers);
-app.get("/games/search", gameController.searchGames);
-app.get("/genres", gameController.getGenres);
-app.get("/games", gameController.getGames);
-app.get("/games/:id", gameController.getGameDetails);
-app.post("/games", gameController.upload.single('gameImage'), gameController.addGame);
-app.put("/games/:id", gameController.upload.single('gameImage'), gameController.updateGame);
-app.delete("/games/:id", gameController.deleteGame);
-app.get("/games/purchased/:userId", gameController.getPurchasedGames);
-app.post("/games/purchase", gameController.purchaseGame);
-app.get("/users/:userId/library", gameController.getUserLibrary);
+app.get("/games/top-sellers", asyncHandler(gameController.getTopSellers));
+app.get("/games/search", asyncHandler(gameController.searchGames));
+app.get("/genres", asyncHandler(gameController.getGenres));
+app.get("/games", asyncHandler(gameController.getGames));
+app.get("/games/:id", asyncHandler(gameController.getGameDetails));
+app.post("/games", gameController.upload.single('gameImage'), asyncHandler(gameController.addGame));
+app.put("/games/:id", gameController.upload.single('gameImage'), asyncHandler(gameController.updateGame));
+app.delete("/games/:id", asyncHandler(gameController.deleteGame));
+app.get("/games/purchased/:userId", asyncHandler(gameController.getPurchasedGames));
+app.post("/games/purchase", asyncHandler(gameController.purchaseGame));
+app.get("/users/:userId/library", asyncHandler(gameController.getUserLibrary));
 
 // === Cart Routes ===
-app.post('/cart', cartController.addToCart);
-app.get('/cart/:userId', cartController.getCart);
-app.put('/cart/:itemId', cartController.updateCartItem);
-app.delete('/cart/:itemId', cartController.removeCartItem);
-app.post('/cart/apply-coupon', cartController.applyCoupon);
-app.post('/checkout', cartController.checkout);
+app.post('/cart', asyncHandler(cartController.addToCart));
+app.get('/cart/:userId', asyncHandler(cartController.getCart));
+app.put('/cart/:itemId', asyncHandler(cartController.updateCartItem));
+app.delete('/cart/:itemId', asyncHandler(cartController.removeCartItem));
+app.post('/cart/apply-coupon', asyncHandler(cartController.applyCoupon));
+app.post('/checkout', asyncHandler(cartController.checkout));
 
 // === Coupon Management Routes ===
-app.post('/coupons', couponController.createCoupon);
-app.get('/coupons', couponController.listCoupons);
-app.put('/coupons/:id/status', couponController.toggleCouponStatus);
+app.post('/coupons', asyncHandler(couponController.createCoupon));
+app.get('/coupons', asyncHandler(couponController.listCoupons));
+app.put('/coupons/:id/status', asyncHandler(couponController.toggleCouponStatus));
 
 // === Default Route ===
 app.get("/", (req, res) => {
@@ -105,6 +104,14 @@ app.get("/", (req, res) => {
     });
 });
 
+// --- ASYNC ERROR HANDLER WRAPPER ---
+// This catches errors from async route handlers
+function asyncHandler(fn) {
+    return (req, res, next) => {
+        Promise.resolve(fn(req, res, next)).catch(next);
+    };
+}
+
 // --- 404 HANDLER ---
 app.use((req, res) => {
     res.status(404).json({ 
@@ -114,10 +121,27 @@ app.use((req, res) => {
     });
 });
 
-// --- ERROR HANDLER ---
+// --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
-    console.error("❌ Server Error:", err.stack);
-    res.status(500).json({ 
+    console.error("❌ Error Handler Caught:", err);
+    
+    // Handle specific error types
+    if (err.name === 'ValidationError') {
+        return res.status(400).json({ 
+            error: "Validation Error",
+            message: err.message 
+        });
+    }
+    
+    if (err.code === 'SQLITE_CONSTRAINT') {
+        return res.status(409).json({ 
+            error: "Database Constraint Error",
+            message: "Duplicate or invalid data" 
+        });
+    }
+    
+    // Default error response
+    res.status(err.status || 500).json({ 
         error: "Internal Server Error",
         message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : err.message
     });
@@ -143,16 +167,17 @@ async function startServer() {
             }
         });
 
-        // Graceful Shutdown Handler (Important for Render)
+        // Set server timeout (important for long-running requests)
+        server.timeout = 30000; // 30 seconds
+
+        // Graceful Shutdown Handler
         const gracefulShutdown = async (signal) => {
             console.log(`\n⚠️  ${signal} received. Starting graceful shutdown...`);
             
             server.close(async () => {
                 console.log("🔒 HTTP server closed");
                 
-                // Add any cleanup logic here (close DB connections, etc.)
                 try {
-                    // If you have any persistent connections, close them here
                     console.log("✅ Cleanup completed");
                     process.exit(0);
                 } catch (err) {
@@ -172,15 +197,17 @@ async function startServer() {
         process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
         process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-        // Handle uncaught exceptions
+        // Handle uncaught exceptions - LOG BUT DON'T CRASH IMMEDIATELY
         process.on('uncaughtException', (err) => {
             console.error("💥 Uncaught Exception:", err);
-            gracefulShutdown('uncaughtException');
+            console.error("Stack:", err.stack);
+            // Don't call gracefulShutdown immediately - let it try to recover
         });
 
         process.on('unhandledRejection', (reason, promise) => {
-            console.error("💥 Unhandled Rejection at:", promise, "reason:", reason);
-            gracefulShutdown('unhandledRejection');
+            console.error("💥 Unhandled Rejection at:", promise);
+            console.error("Reason:", reason);
+            // Don't call gracefulShutdown immediately - let it try to recover
         });
 
     } catch (err) {
