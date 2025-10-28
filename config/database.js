@@ -1,360 +1,243 @@
-const sqlite = require('sqlite');
-const sqlite3 = require('sqlite3');
-const path = require('path');
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const path = require("path");
 
-// --- Configuration ---
-const DB_PATH = path.join(__dirname, '..', 'Data.db');
-const DB_CONFIG = {
-    filename: DB_PATH,
-    driver: sqlite3.Database
-};
+// Import Controllers
+const userController = require("./controllers/userController");
+const gameController = require("./controllers/gameController");
+const cartController = require("./controllers/cartController");
+const couponController = require("./controllers/couponController");
 
-// --- Database Connection Function ---
-const openDb = async () => {
-    try {
-        const db = await sqlite.open(DB_CONFIG);
-        
-        // Enable optimizations
-        await db.run('PRAGMA journal_mode = WAL;');
-        await db.run('PRAGMA foreign_keys = ON;');
-        await db.run('PRAGMA busy_timeout = 5000;'); // 5 second timeout
-        
-        return db;
-    } catch (err) {
-        console.error("❌ Database Connection Error:", err.message);
-        throw err;
-    }
-};
-
-// --- Initialize Database Schema ---
-const initializeSchema = async () => {
-    let db;
-    try {
-        db = await openDb();
-        console.log(`✅ Connected to database: ${DB_PATH}`);
-        console.log("⏳ Initializing schema...");
-
-        await db.exec(`
-            -- 1. User Table
-            CREATE TABLE IF NOT EXISTS User (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                type INTEGER DEFAULT 0,
-                image TEXT,
-                wallet REAL DEFAULT 0.00 NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- 2. Genres Table
-            CREATE TABLE IF NOT EXISTS Genres (
-                GenreID INTEGER PRIMARY KEY AUTOINCREMENT,
-                GenreName VARCHAR(50) NOT NULL UNIQUE
-            );
-
-            -- 3. Games Table
-            CREATE TABLE IF NOT EXISTS Games (
-                GameID INTEGER PRIMARY KEY AUTOINCREMENT,
-                Title VARCHAR(255) NOT NULL,
-                ReleaseDate DATE,
-                Price REAL DEFAULT 0.00,
-                Description TEXT,
-                ImageUrl VARCHAR(255),
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- 4. GamesGenres Table (Many-to-Many)
-            CREATE TABLE IF NOT EXISTS GamesGenres (
-                GameID INTEGER NOT NULL,
-                GenreID INTEGER NOT NULL,
-                PRIMARY KEY (GameID, GenreID),
-                FOREIGN KEY (GameID) REFERENCES Games(GameID) ON DELETE CASCADE,
-                FOREIGN KEY (GenreID) REFERENCES Genres(GenreID) ON DELETE CASCADE
-            );
-
-            -- 5. GamePurchases Table
-            CREATE TABLE IF NOT EXISTS GamePurchases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                game_id INTEGER NOT NULL,
-                purchase_price REAL NOT NULL,
-                purchase_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE,
-                FOREIGN KEY (game_id) REFERENCES Games(GameID) ON DELETE CASCADE
-            );
-
-            -- 6. TopupHistory Table
-            CREATE TABLE IF NOT EXISTS TopupHistory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                transaction_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                payment_method VARCHAR(50),
-                status VARCHAR(20) NOT NULL DEFAULT 'Completed',
-                FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE
-            );
-
-            -- 7. CartItems Table
-            CREATE TABLE IF NOT EXISTS CartItems (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                game_id INTEGER NOT NULL,
-                quantity INTEGER NOT NULL DEFAULT 1,
-                added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE,
-                FOREIGN KEY (game_id) REFERENCES Games(GameID) ON DELETE CASCADE,
-                UNIQUE (user_id, game_id)
-            );
-
-            -- 8. Coupons Table
-            CREATE TABLE IF NOT EXISTS Coupons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT UNIQUE NOT NULL,
-                discount_type TEXT NOT NULL CHECK(discount_type IN ('percentage', 'fixed')),
-                discount_value REAL NOT NULL,
-                expiry_date DATETIME,
-                is_active INTEGER DEFAULT 1 NOT NULL,
-                max_uses INTEGER,
-                uses_count INTEGER DEFAULT 0 NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- 9. CouponUsage Table
-            CREATE TABLE IF NOT EXISTS CouponUsage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                coupon_id INTEGER NOT NULL,
-                used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES User(id) ON DELETE CASCADE,
-                FOREIGN KEY (coupon_id) REFERENCES Coupons(id) ON DELETE CASCADE,
-                UNIQUE (user_id, coupon_id)
-            );
-
-            -- 10. Promotions Table
-            CREATE TABLE IF NOT EXISTS Promotions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL,
-                discount_percentage REAL NOT NULL CHECK(discount_percentage > 0 AND discount_percentage <= 100),
-                start_date DATETIME,
-                end_date DATETIME,
-                is_active INTEGER DEFAULT 1 NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (game_id) REFERENCES Games(GameID) ON DELETE CASCADE
-            );
-
-            -- Indexes for Performance
-            CREATE INDEX IF NOT EXISTS idx_user_email ON User(email);
-            CREATE INDEX IF NOT EXISTS idx_user_type ON User(type);
-            
-            CREATE INDEX IF NOT EXISTS idx_games_title ON Games(Title);
-            CREATE INDEX IF NOT EXISTS idx_games_price ON Games(Price);
-            
-            CREATE INDEX IF NOT EXISTS idx_gamesgenres_game ON GamesGenres(GameID);
-            CREATE INDEX IF NOT EXISTS idx_gamesgenres_genre ON GamesGenres(GenreID);
-            
-            CREATE INDEX IF NOT EXISTS idx_gamepurchases_user ON GamePurchases(user_id);
-            CREATE INDEX IF NOT EXISTS idx_gamepurchases_game ON GamePurchases(game_id);
-            CREATE INDEX IF NOT EXISTS idx_gamepurchases_date ON GamePurchases(purchase_date);
-            
-            CREATE INDEX IF NOT EXISTS idx_cartitems_user ON CartItems(user_id);
-            CREATE INDEX IF NOT EXISTS idx_cartitems_game ON CartItems(game_id);
-            
-            CREATE INDEX IF NOT EXISTS idx_promotions_game ON Promotions(game_id);
-            CREATE INDEX IF NOT EXISTS idx_promotions_active ON Promotions(is_active, start_date, end_date);
-            
-            CREATE INDEX IF NOT EXISTS idx_coupons_code ON Coupons(code);
-            CREATE INDEX IF NOT EXISTS idx_coupons_active ON Coupons(is_active);
-            
-            CREATE INDEX IF NOT EXISTS idx_couponusage_user_coupon ON CouponUsage(user_id, coupon_id);
-            
-            CREATE INDEX IF NOT EXISTS idx_topuphistory_user ON TopupHistory(user_id);
-            CREATE INDEX IF NOT EXISTS idx_topuphistory_date ON TopupHistory(transaction_date);
-        `);
-
-        console.log("✅ Schema initialized successfully");
-
-        // Seed default genres
-        await seedDefaultGenres(db);
-        
-        console.log("✅ Database initialization complete");
-
-    } catch (error) {
-        console.error("❌ Schema Initialization Error:", error.message);
-        throw error;
-    } finally {
-        if (db) {
-            await db.close();
-            console.log("🔒 Database connection closed");
-        }
-    }
-};
-
-// --- Seed Default Genres ---
-const seedDefaultGenres = async (db) => {
-    try {
-        const genres = [
-            'Action', 'Adventure', 'Role-Playing (RPG)', 'Strategy', 
-            'Simulation', 'Sports', 'Puzzle', 'Racing', 
-            'Horror', 'Platformer', 'Fighting', 'Survival',
-            'Sandbox', 'MOBA', 'Battle Royale', 'FPS'
-        ];
-
-        const stmt = await db.prepare('INSERT OR IGNORE INTO Genres (GenreName) VALUES (?)');
-        
-        for (const genre of genres) {
-            await stmt.run(genre);
-        }
-        
-        await stmt.finalize();
-        console.log("🌱 Default genres seeded");
-    } catch (error) {
-        console.error("❌ Error seeding genres:", error.message);
-    }
-};
-
-// --- Helper: Execute with Auto-Close ---
-const executeQuery = async (callback) => {
-    let db;
-    try {
-        db = await openDb();
-        return await callback(db);
-    } catch (error) {
-        console.error("❌ Query Execution Error:", error.message);
-        throw error;
-    } finally {
-        if (db) {
-            await db.close();
-        }
-    }
-};
-
-// --- Helper: Execute Transaction ---
-const executeTransaction = async (callback) => {
-    let db;
-    try {
-        db = await openDb();
-        await db.run('BEGIN TRANSACTION');
-        
-        const result = await callback(db);
-        
-        await db.run('COMMIT');
-        return result;
-    } catch (error) {
-        if (db) {
-            await db.run('ROLLBACK');
-        }
-        console.error("❌ Transaction Error:", error.message);
-        throw error;
-    } finally {
-        if (db) {
-            await db.close();
-        }
-    }
-};
-
-// --- Export Functions ---
-module.exports = {
-    openDb,              // Manual connection management
-    initializeSchema,    // Initialize DB schema
-    executeQuery,        // Auto-close query execution
-    executeTransaction   // Auto-close transaction execution
-};
-
-// --- Usage Examples ---
-
-/*
-// 1. Server Startup (server.js):
+// Import Database Config
 const database = require('./config/database');
 
-database.initializeSchema()
-    .then(() => {
-        app.listen(PORT, () => {
-            console.log(`✅ Server running on port ${PORT}`);
-        });
-    })
-    .catch(err => {
-        console.error("💀 Failed to initialize database");
-        process.exit(1);
-    });
+// Initialize Express App
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// 2. Simple Query (Using executeQuery):
-const database = require('../config/database');
-
-exports.getCart = async (req, res) => {
-    const userId = req.params.userId;
-    
-    try {
-        const items = await database.executeQuery(async (db) => {
-            return await db.all(`
-                SELECT c.*, g.Title, g.Price, g.ImageUrl 
-                FROM CartItems c
-                JOIN Games g ON c.game_id = g.GameID
-                WHERE c.user_id = ?
-            `, [userId]);
-        });
-        
-        res.json(items);
-    } catch (error) {
-        console.error("❌ Error fetching cart:", error.message);
-        res.status(500).json({ message: 'Error fetching cart' });
-    }
+// --- MIDDLEWARE ---
+// CORS Configuration
+const corsOptions = {
+    origin: process.env.FRONTEND_URL || '*',
+    credentials: true,
+    optionsSuccessStatus: 200
 };
+app.use(cors(corsOptions));
 
-// 3. Transaction (Using executeTransaction):
-exports.addToCart = async (req, res) => {
-    const { userId, gameId, quantity = 1 } = req.body;
+// Body Parser with limits
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request Logging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
+
+// --- STATIC FILE SERVING ---
+const uploadsPath = path.join(__dirname, 'uploads');
+app.use('/profile', express.static(path.join(uploadsPath, 'profile')));
+app.use('/gamepic', express.static(path.join(uploadsPath, 'gamepic')));
+
+// --- HEALTH CHECK ROUTE ---
+app.get("/health", (req, res) => {
+    res.status(200).json({ 
+        status: "healthy", 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
+});
+
+// --- ROUTES ---
+
+// === Authentication Routes ===
+app.post("/register", asyncHandler(userController.register));
+app.post("/login", asyncHandler(userController.login));
+
+// === User Profile Routes ===
+app.put("/update-profile/:id", userController.upload.single("image"), asyncHandler(userController.updateProfile));
+
+// === Wallet Routes (Specific routes BEFORE generic ones) ===
+app.get("/wallet/topup-history/:id", asyncHandler(userController.getTopupHistory));
+app.get("/wallet/purchase-history/:id", asyncHandler(userController.getPurchaseHistory));
+app.get("/wallet/history/:id", asyncHandler(userController.getTopupHistory)); // Backward compatibility
+app.get("/wallet/:id", asyncHandler(userController.getWallet));
+app.put("/wallet/:id", asyncHandler(userController.addFunds));
+
+// === User Management Routes (Specific routes BEFORE generic ones) ===
+app.get("/users/details/:id", asyncHandler(userController.getUserDetailsForAdmin));
+app.get("/users", asyncHandler(userController.getAllUsers));
+app.delete("/users/:id", asyncHandler(userController.deleteUser));
+
+// === Game Routes (Specific routes BEFORE generic ones) ===
+app.get("/games/top-sellers", asyncHandler(gameController.getTopSellers));
+app.get("/games/search", asyncHandler(gameController.searchGames));
+app.get("/games/purchased/:userId", asyncHandler(gameController.getPurchasedGames));
+app.get("/games/:id", asyncHandler(gameController.getGameDetails));
+app.get("/games", asyncHandler(gameController.getGames));
+app.post("/games", gameController.upload.single('gameImage'), asyncHandler(gameController.addGame));
+app.put("/games/:id", gameController.upload.single('gameImage'), asyncHandler(gameController.updateGame));
+app.delete("/games/:id", asyncHandler(gameController.deleteGame));
+app.post("/games/purchase", asyncHandler(gameController.purchaseGame));
+
+// === Genre Routes ===
+app.get("/genres", asyncHandler(gameController.getGenres));
+
+// === User Library Routes ===
+app.get("/users/:userId/library", asyncHandler(gameController.getUserLibrary));
+
+// === Cart Routes (Specific routes BEFORE generic ones) ===
+app.post('/cart/apply-coupon', asyncHandler(cartController.applyCoupon));
+app.get('/cart/:userId', asyncHandler(cartController.getCart));
+app.post('/cart', asyncHandler(cartController.addToCart));
+app.put('/cart/:itemId', asyncHandler(cartController.updateCartItem));
+app.delete('/cart/:itemId', asyncHandler(cartController.removeCartItem));
+
+// === Checkout Routes ===
+app.post('/checkout', asyncHandler(cartController.checkout));
+
+// === Coupon Management Routes (Specific routes BEFORE generic ones) ===
+app.put('/coupons/:id/status', asyncHandler(couponController.toggleCouponStatus));
+app.post('/coupons', asyncHandler(couponController.createCoupon));
+app.get('/coupons', asyncHandler(couponController.listCoupons));
+
+// === Default Route ===
+app.get("/", (req, res) => {
+    res.json({ 
+        message: "🚀 Game Store API is running",
+        version: "1.0.0",
+        endpoints: {
+            health: "/health",
+            auth: ["/register", "/login"],
+            users: ["/users", "/users/details/:id", "/users/:userId/library"],
+            wallet: ["/wallet/:id", "/wallet/topup-history/:id", "/wallet/purchase-history/:id"],
+            games: ["/games", "/games/:id", "/games/top-sellers", "/games/search"],
+            genres: "/genres",
+            cart: ["/cart", "/cart/:userId", "/cart/apply-coupon"],
+            checkout: "/checkout",
+            coupons: "/coupons"
+        }
+    });
+});
+
+// --- ASYNC ERROR HANDLER WRAPPER ---
+// This catches errors from async route handlers
+function asyncHandler(fn) {
+    return (req, res, next) => {
+        Promise.resolve(fn(req, res, next)).catch(next);
+    };
+}
+
+// --- 404 HANDLER ---
+app.use((req, res) => {
+    res.status(404).json({ 
+        error: "Route not found",
+        path: req.path,
+        method: req.method,
+        suggestion: "Check the available endpoints at /"
+    });
+});
+
+// --- GLOBAL ERROR HANDLER ---
+app.use((err, req, res, next) => {
+    console.error("❌ Error Handler Caught:", err);
     
+    // Handle specific error types
+    if (err.name === 'ValidationError') {
+        return res.status(400).json({ 
+            error: "Validation Error",
+            message: err.message 
+        });
+    }
+    
+    if (err.code === 'SQLITE_CONSTRAINT') {
+        return res.status(409).json({ 
+            error: "Database Constraint Error",
+            message: "Duplicate or invalid data" 
+        });
+    }
+    
+    // Default error response
+    res.status(err.status || 500).json({ 
+        error: "Internal Server Error",
+        message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : err.message
+    });
+});
+
+// --- START SERVER FUNCTION ---
+async function startServer() {
     try {
-        await database.executeTransaction(async (db) => {
-            // Check if game exists
-            const game = await db.get('SELECT * FROM Games WHERE GameID = ?', [gameId]);
-            if (!game) throw new Error('Game not found');
-            
-            // Check if already in cart
-            const existing = await db.get(
-                'SELECT * FROM CartItems WHERE user_id = ? AND game_id = ?',
-                [userId, gameId]
-            );
-            
-            if (existing) {
-                await db.run(
-                    'UPDATE CartItems SET quantity = quantity + ? WHERE id = ?',
-                    [quantity, existing.id]
-                );
-            } else {
-                await db.run(
-                    'INSERT INTO CartItems (user_id, game_id, quantity) VALUES (?, ?, ?)',
-                    [userId, gameId, quantity]
-                );
+        console.log("🔧 Environment:", process.env.NODE_ENV || 'development');
+        console.log("🔧 Port:", PORT);
+        console.log("⏳ Initializing database schema...");
+        
+        // Initialize Database Schema
+        await database.initializeSchema();
+        console.log("✅ Database schema initialized successfully");
+        
+        // Start Express Server
+        const server = app.listen(PORT, '0.0.0.0', () => {
+            console.log(`✅ Server is running on port ${PORT}`);
+            console.log(`🌐 Local: http://localhost:${PORT}`);
+            console.log(`📋 API Documentation: http://localhost:${PORT}/`);
+            if (process.env.RENDER_EXTERNAL_URL) {
+                console.log(`🌐 Render: ${process.env.RENDER_EXTERNAL_URL}`);
             }
         });
-        
-        res.status(200).json({ message: 'Added to cart successfully' });
-    } catch (error) {
-        console.error("❌ Error adding to cart:", error.message);
-        res.status(500).json({ message: error.message });
-    }
-};
 
-// 4. Manual Connection (For complex scenarios):
-const database = require('../config/database');
+        // Set server timeout (important for long-running requests)
+        server.timeout = 30000; // 30 seconds
 
-exports.complexOperation = async (req, res) => {
-    let db;
-    try {
-        db = await database.openDb();
-        
-        // Multiple operations
-        const data1 = await db.all('SELECT ...');
-        const data2 = await db.all('SELECT ...');
-        
-        res.json({ data1, data2 });
-    } catch (error) {
-        console.error("Error:", error.message);
-        res.status(500).json({ message: 'Error' });
-    } finally {
-        if (db) await db.close();
+        // Graceful Shutdown Handler
+        const gracefulShutdown = async (signal) => {
+            console.log(`\n⚠️  ${signal} received. Starting graceful shutdown...`);
+            
+            server.close(async () => {
+                console.log("🔒 HTTP server closed");
+                
+                try {
+                    console.log("✅ Cleanup completed");
+                    process.exit(0);
+                } catch (err) {
+                    console.error("❌ Error during cleanup:", err);
+                    process.exit(1);
+                }
+            });
+
+            // Force shutdown after 10 seconds
+            setTimeout(() => {
+                console.error("⚠️  Forced shutdown after timeout");
+                process.exit(1);
+            }, 10000);
+        };
+
+        // Handle shutdown signals
+        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+        // Handle uncaught exceptions - LOG BUT DON'T CRASH IMMEDIATELY
+        process.on('uncaughtException', (err) => {
+            console.error("💥 Uncaught Exception:", err);
+            console.error("Stack:", err.stack);
+            // Don't call gracefulShutdown immediately - let it try to recover
+        });
+
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error("💥 Unhandled Rejection at:", promise);
+            console.error("Reason:", reason);
+            // Don't call gracefulShutdown immediately - let it try to recover
+        });
+
+    } catch (err) {
+        console.error("💀 Failed to start server:", err.message);
+        console.error(err.stack);
+        process.exit(1);
     }
-};
-*/
+}
+
+// --- START THE SERVER ---
+startServer();
+
+// Export app for testing
+module.exports = app;
