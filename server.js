@@ -62,7 +62,8 @@ app.get("/wallet/purchase-history/:id", asyncHandler(userController.getPurchaseH
 app.get("/users", asyncHandler(userController.getAllUsers));
 app.delete("/users/:id", asyncHandler(userController.deleteUser));
 app.get("/users/details/:id", asyncHandler(userController.getUserDetailsForAdmin));
-
+app.get("/wallet/topup-history/:id", asyncHandler(userController.getTopupHistory));
+app.get("/wallet/purchase-history/:id", asyncHandler(userController.getPurchaseHistory));
 // === Game Routes ===
 app.get("/games/top-sellers", asyncHandler(gameController.getTopSellers));
 app.get("/games/search", asyncHandler(gameController.searchGames));
