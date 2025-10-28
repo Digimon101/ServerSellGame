@@ -88,20 +88,20 @@ exports.getCart = async (req, res) => {
     try {
         const items = await database.executeQuery(async (db) => {
             const sql = `
-                SELECT 
-                    ci.id AS CartItemID, 
-                    g.GameID, 
-                    g.Title, 
-                    g.Price, 
-                    g.ImageUrl, 
-                    ci.quantity 
-                FROM CartItems AS ci
-                JOIN Games AS g ON ci.game_id = g.GameID
-                WHERE ci.user_id = ?
-                ORDER BY ci.added_date DESC 
-            `;
-            return await db.all(sql, [userId]);
-        });
+                SELECT 
+                    ci.id AS CartItemID, 
+                    g.GameID, 
+                    g.Title, 
+                    g.Price, 
+                    g.ImageUrl, 
+                    ci.quantity 
+                FROM CartItems AS ci
+                JOIN Games AS g ON ci.game_id = g.GameID
+                WHERE ci.user_id = ?
+                ORDER BY ci.added_date DESC 
+            `;
+            return await db.all(sql, [userId]);
+        });
         
         const processedItems = (items || []).map(item => ({
             ...item,
