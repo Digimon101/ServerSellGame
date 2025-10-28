@@ -222,7 +222,7 @@ const updateGame = async (req, res) => {
 
     const discountPercentValue = discountPercentage ? parseFloat(discountPercentage) : null;
     if (discountPercentValue !== null) {
-        if (isNaN(discountPercentValue) || discountPercentValue <= 0 || discountPercentValue > 100) {
+        if (isNaN(discountPercentValue) || discountPercentValue < 0 || discountPercentValue > 100) {
             return res.status(400).json({ error: 'เปอร์เซ็นต์ส่วนลดต้องอยู่ระหว่าง 0 ถึง 100' });
         }
         if (promotionStartDate && isNaN(Date.parse(promotionStartDate))) {
